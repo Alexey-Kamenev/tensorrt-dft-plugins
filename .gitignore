@@ -1,0 +1,14 @@
+# Binary files.
+__pycache__/
+*.py[cod]
+
+# Shared libraries.
+*.so
+
+# Build and packages.
+build/
+*.egg-info/
+
+# Unit tests.
+.hypothesis/
+.pytest_cache/
