@@ -45,9 +45,9 @@ static std::string DFT_PLUGIN_VERSION{"1"};
 // DFT plugins base class.
 //
 template<int Direction>
-class RfftPluginBase: public IPluginV2DynamicExt {
+class FftPluginBase: public IPluginV2DynamicExt {
  public:
-    RfftPluginBase(int32_t normalized, int32_t onesided, int32_t signal_ndim):
+    FftPluginBase(int32_t normalized, int32_t onesided, int32_t signal_ndim):
         normalized_(normalized),
         onesided_(onesided),
         signal_ndim_(signal_ndim) {
@@ -58,7 +58,7 @@ class RfftPluginBase: public IPluginV2DynamicExt {
     }
 
     // Deserialization ctor.
-    RfftPluginBase(void const* data, size_t size) {
+    FftPluginBase(void const* data, size_t size) {
         assert(data != nullptr);
         assert(size == getSerializationSize());
 
@@ -167,10 +167,10 @@ class RfftPluginBase: public IPluginV2DynamicExt {
 
         // Create cuFFT plan.
         auto [batch_size, dft_dims] = splitSignalDims();
-        auto in_out_types = getInOutTypes();
+        // auto in_out_types = getInOutTypes();
         err = cufftXtMakePlanMany(*handle_, signal_ndim_, dft_dims.data(),
-                                  /*inembed*/nullptr, 1, 0, std::get<0>(in_out_types),
-                                  /*onembed*/nullptr, 1, 0, std::get<1>(in_out_types),
+                                  /*inembed*/nullptr, 1, 0, CUDA_C_32F,
+                                  /*onembed*/nullptr, 1, 0, CUDA_C_32F,
                                   /*batch*/batch_size,
                                   /*workSize*/ws_size_.data(),
                                   /*executiontype*/CUDA_C_32F);
@@ -240,7 +240,7 @@ class RfftPluginBase: public IPluginV2DynamicExt {
     }
 
  protected:
-    virtual RfftPluginBase* cloneImpl() const noexcept = 0;
+    virtual FftPluginBase* cloneImpl() const noexcept = 0;
 
     virtual std::pair<cudaDataType, cudaDataType> getInOutTypes() const noexcept = 0;
 
@@ -254,7 +254,9 @@ class RfftPluginBase: public IPluginV2DynamicExt {
 
         // cuFFT supports only 1D, 2D and 3D DFTs.
         std::array<long long, 3> dft_dims;
-        int32_t dim_start = dims.nbDims - signal_ndim_;
+
+	// subtract 1 since the last dimension will be real/imag values
+        int32_t dim_start = dims.nbDims - signal_ndim_ - 1;
         for (int32_t i = 0; i < signal_ndim_; i++)
             dft_dims[i] = dims.d[dim_start + i];
         // Fold other dimensions into a single batch dim.
@@ -343,15 +345,15 @@ class RfftPluginBase: public IPluginV2DynamicExt {
 };
 
 
-class RfftPlugin: public RfftPluginBase<CUFFT_FORWARD> {
+class FftPlugin: public FftPluginBase<CUFFT_FORWARD> {
  public:
-    RfftPlugin(int32_t normalized, int32_t onesided, int32_t signal_ndim):
-        RfftPluginBase(normalized, onesided, signal_ndim) {
+    FftPlugin(int32_t normalized, int32_t onesided, int32_t signal_ndim):
+        FftPluginBase(normalized, onesided, signal_ndim) {
     }
 
     // Deserialization ctor.
-    RfftPlugin(void const* data, size_t size):
-        RfftPluginBase(data, size) {
+    FftPlugin(void const* data, size_t size):
+        FftPluginBase(data, size) {
     }
 
     AsciiChar const* getPluginType() const noexcept override {
@@ -367,45 +369,45 @@ class RfftPlugin: public RfftPluginBase<CUFFT_FORWARD> {
         DimsExprs output(inputs[0]);
         // RFFT output is complex, so add a dimension for complex number representation.
         assert(output.nbDims < Dims::MAX_DIMS);
-        output.nbDims += 1;
-        output.d[output.nbDims - 1] = exprBuilder.constant(2);
+        // output.nbDims += 1;
+        // output.d[output.nbDims - 1] = exprBuilder.constant(2);
         // Since it's real-to-complex DFT transform, it is Hermitian,
         // so the last *signal* dim is halved.
-        output.d[output.nbDims - 2] = exprBuilder.operation(
-            DimensionOperation::kSUM,
-            *exprBuilder.operation(
-                DimensionOperation::kFLOOR_DIV,
-                *output.d[output.nbDims - 2],
-                *exprBuilder.constant(2)),
-            *exprBuilder.constant(1));
+        // output.d[output.nbDims - 2] = exprBuilder.operation(
+        //     DimensionOperation::kSUM,
+        //     *exprBuilder.operation(
+        //         DimensionOperation::kFLOOR_DIV,
+        //         *output.d[output.nbDims - 2],
+        //         *exprBuilder.constant(2)),
+        //     *exprBuilder.constant(1));
         return output;
     }
 
  public:
-    static constexpr char name[]{"Rfft"};
+    static constexpr char name[]{"Fft"};
 
  protected:
-    RfftPluginBase* cloneImpl() const noexcept override {
-        return new RfftPlugin(normalized_, onesided_, signal_ndim_);
+    FftPluginBase* cloneImpl() const noexcept override {
+        return new FftPlugin(normalized_, onesided_, signal_ndim_);
     }
 
     std::pair<cudaDataType, cudaDataType> getInOutTypes() const noexcept override {
-        return {CUDA_R_32F, CUDA_C_32F};
+        return {CUDA_C_32F, CUDA_C_32F};
     }
 
     Dims getSignalDims() const noexcept override { return in_desc_.desc.dims; }
 };
 
 
-class IrfftPlugin: public RfftPluginBase<CUFFT_INVERSE> {
+class IfftPlugin: public FftPluginBase<CUFFT_INVERSE> {
  public:
-    IrfftPlugin(int32_t normalized, int32_t onesided, int32_t signal_ndim):
-        RfftPluginBase(normalized, onesided, signal_ndim) {
+    IfftPlugin(int32_t normalized, int32_t onesided, int32_t signal_ndim):
+        FftPluginBase(normalized, onesided, signal_ndim) {
     }
 
     // Deserialization ctor.
-    IrfftPlugin(void const* data, size_t size):
-        RfftPluginBase(data, size) {
+    IfftPlugin(void const* data, size_t size):
+        FftPluginBase(data, size) {
     }
 
     AsciiChar const* getPluginType() const noexcept override {
@@ -422,16 +424,16 @@ class IrfftPlugin: public RfftPluginBase<CUFFT_INVERSE> {
         // IRFFT input is complex, output is real, so remove the last dimension
         // used for complex numbers representation.
         assert(output.nbDims > 1);
-        output.nbDims -= 1;
+        // output.nbDims -= 1;
         // Since the input is one-sided, Hermitian signal, the real-valued
         // output will have the last dimension of (N - 1) * 2.
-        output.d[output.nbDims - 1] = exprBuilder.operation(
-            DimensionOperation::kPROD,
-            *exprBuilder.operation(
-                DimensionOperation::kSUB,
-                *output.d[output.nbDims - 1],
-                *exprBuilder.constant(1)),
-            *exprBuilder.constant(2));
+        // output.d[output.nbDims - 1] = exprBuilder.operation(
+        //     DimensionOperation::kPROD,
+        //     *exprBuilder.operation(
+        //         DimensionOperation::kSUB,
+        //         *output.d[output.nbDims - 1],
+        //         *exprBuilder.constant(1)),
+        //     *exprBuilder.constant(2));
         return output;
     }
 
@@ -451,6 +453,8 @@ class IrfftPlugin: public RfftPluginBase<CUFFT_INVERSE> {
         if (err != 0)
             return err;
 
+        // TODO: implement normalization schemes
+
         err = cublasSetStream(*cublas_, stream);
         assert(err == CUBLAS_STATUS_SUCCESS);
 
@@ -462,27 +466,28 @@ class IrfftPlugin: public RfftPluginBase<CUFFT_INVERSE> {
             total_dft_size *= dft_dims[i];
 
         float scale = 1.0f / total_dft_size;
+	float2 complex_scale = make_float2(scale, 0.0f);
         err = cublasScalEx(*cublas_, batch_size * total_dft_size,
-                           &scale, CUDA_R_32F,
-                           outputs[0], CUDA_R_32F, 1,
-                           CUDA_R_32F);
+                           &complex_scale, CUDA_C_32F,
+                           outputs[0], CUDA_C_32F, 1,
+                           CUDA_C_32F);
         assert(err == CUBLAS_STATUS_SUCCESS);
 
         return 0;
     }
 
  public:
-    static constexpr char name[]{"Irfft"};
+    static constexpr char name[]{"Ifft"};
 
  protected:
-    using Base = RfftPluginBase<CUFFT_INVERSE>;
+    using Base = FftPluginBase<CUFFT_INVERSE>;
 
-    RfftPluginBase* cloneImpl() const noexcept override {
-        return new IrfftPlugin(normalized_, onesided_, signal_ndim_);
+    FftPluginBase* cloneImpl() const noexcept override {
+        return new IfftPlugin(normalized_, onesided_, signal_ndim_);
     }
 
     std::pair<cudaDataType, cudaDataType> getInOutTypes() const noexcept override {
-        return {CUDA_C_32F, CUDA_R_32F};
+        return {CUDA_C_32F, CUDA_C_32F};
     }
 
     Dims getSignalDims() const noexcept override { return out_desc_.desc.dims; }
@@ -495,9 +500,9 @@ class IrfftPlugin: public RfftPluginBase<CUFFT_INVERSE> {
 // Plugin creators.
 //
 template<typename PluginType>
-class RfftPluginCreator: public IPluginCreator {
+class FftPluginCreator: public IPluginCreator {
  public:
-    RfftPluginCreator() {
+    FftPluginCreator() {
         attrs_.emplace_back(PluginField{"normalized", nullptr, PluginFieldType::kINT32, 1});
         attrs_.emplace_back(PluginField{"onesided", nullptr, PluginFieldType::kINT32, 1});
         attrs_.emplace_back(PluginField{"signal_ndim", nullptr, PluginFieldType::kINT32, 1});
@@ -572,7 +577,7 @@ class RfftPluginCreator: public IPluginCreator {
 
 // Register plugins.
 // Taken from REGISTER_TENSORRT_PLUGIN macro which won't work in this case.
-static PluginRegistrar<RfftPluginCreator<RfftPlugin>> pluginRegistrarRfftPluginCreator {};
-static PluginRegistrar<RfftPluginCreator<IrfftPlugin>> pluginRegistrarIrfftPluginCreator {};
+static PluginRegistrar<FftPluginCreator<FftPlugin>> pluginRegistrarFftPluginCreator {};
+static PluginRegistrar<FftPluginCreator<IfftPlugin>> pluginRegistrarIfftPluginCreator {};
 
 }  // namespace trt_dft
